@@ -24,16 +24,19 @@ _stemmer = PorterStemmer()
 _lemmatizer = WordNetLemmatizer()
 _stop = set(stopwords.words("english"))
 
-
 def _clean(text):
-    """Remove URLs, @mentions, and extra spaces."""
+    """Clean text but keep some realistic noise"""
     if not isinstance(text, str):
         return ""
-    text = re.sub(r"http\S+|www\.\S+", "", text)
-    text = re.sub(r"@\w+", "", text)
-    text = re.sub(r"#\w+", "", text)
-    text = re.sub(r"[^a-zA-Z\s]", " ", text)
-    return " ".join(text.split()).strip().lower()
+    
+    # Keep some hashtags/emojis for realism
+    text = re.sub(r"http\S+|www\S+", "", text)  # Only remove URLs
+    # text = re.sub(r"@\w+", "", text)         # COMMENTED: Keep @mentions
+    # text = re.sub(r"#\w+", "", text)         # COMMENTED: Keep #hashtags
+    
+    text = re.sub(r"[^a-zA-Z0-9\s@#?!.,]+", " ", text)
+    return " ".join(text.split())[:280]  # Twitter length limit
+
 
 
 def tokenize(text):
@@ -68,3 +71,4 @@ def pipeline(text, remove_stopwords=True):
 def pipeline_for_vectorizer(text):
     """Wrapper for sklearn TfidfVectorizer: returns processed string."""
     return pipeline(text, remove_stopwords=True)
+

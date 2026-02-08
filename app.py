@@ -14,7 +14,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -98,35 +98,59 @@ def get_models():
 
 def train_and_evaluate(df, vectorizer, models):
     """
-    Train all 4 models, return metrics, fitted vectorizer, fitted models,
-    y_true, y_pred per model, and best model name.
+    Train all 4 models with 5-fold Cross-Validation for REALISTIC metrics.
+    Returns: metrics_df, fitted vectorizer, fitted models, predictions, best model.
     """
-    # Binary: 0 -> 0, 4 -> 1 (Sentiment140)
+    # Step 1: Binary labels (Sentiment140: 0→Negative=0, 4→Positive=1)
     y = (df["target"].values == 4).astype(int)
     X_text = df["text"].astype(str).values
 
-    # NLP pipeline + TF-IDF
+    # Step 2: NLP pipeline + TF-IDF vectorization (10K features + bigrams)
     X_tfidf = vectorizer.fit_transform(X_text)
+    
+    # Step 3: Train/Test split (80/20 stratified - maintains class balance)
     X_train, X_test, y_train, y_test = train_test_split(
         X_tfidf, y, test_size=0.2, random_state=42, stratify=y
     )
 
     results = []
     predictions = {}
+    
+    # Step 4: Train + Evaluate ALL 4 models
     for name, model in models.items():
+        # Train model on 80% data
         model.fit(X_train, y_train)
+        
+        # Test predictions on 20% holdout
         y_pred = model.predict(X_test)
         predictions[name] = (y_test, y_pred)
+        
+        # Test set metrics (single 80/20 split)
+        test_accuracy = accuracy_score(y_test, y_pred)
+        test_precision = precision_score(y_test, y_pred, zero_division=0)
+        test_recall = recall_score(y_test, y_pred, zero_division=0)
+        test_f1 = f1_score(y_test, y_pred, zero_division=0)
+        
+        # 5-FOLD CROSS-VALIDATION (MUCH more realistic!)
+        cv_f1_scores = cross_val_score(
+            model, X_tfidf, y, cv=5, scoring='f1', n_jobs=-1  # Parallel CV
+        )
+        
+        # Store ALL metrics
         results.append({
             "Model": name,
-            "Accuracy": accuracy_score(y_test, y_pred),
-            "Precision": precision_score(y_test, y_pred, zero_division=0),
-            "Recall": recall_score(y_test, y_pred, zero_division=0),
-            "F1": f1_score(y_test, y_pred, zero_division=0),
+            "Test Acc": round(test_accuracy, 4),
+            "Precision": round(test_precision, 4),
+            "Recall": round(test_recall, 4),
+            "Test F1": round(test_f1, 4),
+            "CV F1": round(cv_f1_scores.mean(), 4),  # ⭐ REALISTIC METRIC
+            "CV Std": round(cv_f1_scores.std(), 4),   # Shows stability
         })
 
-    best_name = max(results, key=lambda x: x["F1"])["Model"]
+    # Best model by Cross-Validation F1 (most reliable)
+    best_name = max(results, key=lambda x: x["CV F1"])["Model"]
     metrics_df = pd.DataFrame(results)
+    
     return metrics_df, vectorizer, models, predictions, best_name, X_test, y_test
 
 
@@ -156,7 +180,7 @@ def main():
     st.markdown('<p class="main-header">🐦 Twitter Sentiment Analysis</p>', unsafe_allow_html=True)
     st.markdown(
         '<p class="sub-header">NLP pipeline: Tokenization → Stemming → Lemmatization → TF-IDF | '
-        'Models: Naive Bayes, Logistic Regression, Decision Tree, Random Forest</p>',
+        'Models: Naive Bayes, Logistic Regression, Decision Tree, Random Forest | 5-Fold CV</p>',
         unsafe_allow_html=True,
     )
 
@@ -177,19 +201,18 @@ def main():
             )
         train_clicked = st.button("🔄 Train models", type="primary", use_container_width=True)
         st.markdown("---")
-        st.caption("After training, use the tabs for comparison, confusion matrix, live detection, and export.")
+        st.caption("After training, use tabs for comparison, confusion matrix, live detection, and export.")
 
     # Load data
     df = load_data(custom_path if data_source == "Custom CSV file" else None)
     st.sidebar.caption(f"Dataset: {len(df):,} tweets")
+    
     # DEBUG INFO - Shows dataset quality
     with st.sidebar.expander("📊 Dataset Quality"):
         st.write(f"**Total tweets:** {len(df):,}")
         st.write(f"**Unique texts:** {df['text'].nunique()}")
         st.write(f"**Unique positive:** {df[df.target==4]['text'].nunique()}")
         st.write(f"**Unique negative:** {df[df.target==0]['text'].nunique()}")
-        
-        # Show text variety
         st.write("**Sample positive:**")
         st.write(df[df.target==4]['text'].head(3).tolist())
         st.write("**Sample negative:**")
@@ -208,7 +231,7 @@ def main():
         st.session_state.predictions = None
 
     if train_clicked:
-        with st.spinner("Running NLP pipeline and training 4 models..."):
+        with st.spinner("Running NLP pipeline + training 4 models with 5-fold CV..."):
             vectorizer = TfidfVectorizer(
                 preprocessor=pipeline_for_vectorizer,
                 tokenizer=lambda x: x.split(),
@@ -224,7 +247,7 @@ def main():
             st.session_state.models = fitted_models
             st.session_state.best_model_name = best_name
             st.session_state.predictions = predictions
-        st.sidebar.success("Training complete.")
+        st.sidebar.success("✅ Training complete! CV scores calculated.")
 
     # Tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -236,15 +259,25 @@ def main():
     ])
 
     with tab1:
-        st.subheader("Model comparison")
+        st.subheader("Model comparison (5-Fold Cross-Validation)")
         if st.session_state.metrics_df is not None:
             comparison = st.session_state.metrics_df.copy()
-            for col in ["Accuracy", "Precision", "Recall", "F1"]:
-                comparison[col] = comparison[col].round(4)
+            # Format all numeric columns
+            numeric_cols = ["Test Acc", "Precision", "Recall", "Test F1", "CV F1", "CV Std"]
+            for col in numeric_cols:
+                if col in comparison.columns:
+                    comparison[col] = comparison[col].round(4)
             st.dataframe(comparison, use_container_width=True, hide_index=True)
-            st.caption("Best model (by F1): **" + st.session_state.best_model_name + "**")
+            
+            # Highlight BEST CV F1
+            best_row = comparison.loc[comparison["CV F1"].idxmax()]
+            st.metric(
+                label="🏆 Best Model (Cross-Validation F1)",
+                value=f"{best_row['Model']}: {best_row['CV F1']}"
+            )
+            st.caption("**CV F1** = Most reliable metric | **Lower CV Std** = More stable model")
         else:
-            st.info("Click **Train models** in the sidebar to see the comparison table.")
+            st.info("👈 Click **Train models** in sidebar to see comparison table.")
 
     with tab2:
         st.subheader("Confusion matrix (best model)")
@@ -349,4 +382,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

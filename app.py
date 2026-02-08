@@ -182,6 +182,18 @@ def main():
     # Load data
     df = load_data(custom_path if data_source == "Custom CSV file" else None)
     st.sidebar.caption(f"Dataset: {len(df):,} tweets")
+    # DEBUG INFO - Shows dataset quality
+    with st.sidebar.expander("📊 Dataset Quality"):
+        st.write(f"**Total tweets:** {len(df):,}")
+        st.write(f"**Unique texts:** {df['text'].nunique()}")
+        st.write(f"**Unique positive:** {df[df.target==4]['text'].nunique()}")
+        st.write(f"**Unique negative:** {df[df.target==0]['text'].nunique()}")
+        
+        # Show text variety
+        st.write("**Sample positive:**")
+        st.write(df[df.target==4]['text'].head(3).tolist())
+        st.write("**Sample negative:**")
+        st.write(df[df.target==0]['text'].head(3).tolist())
 
     # Session state for trained artifacts
     if "metrics_df" not in st.session_state:
@@ -337,3 +349,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
